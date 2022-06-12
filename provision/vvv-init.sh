@@ -133,4 +133,4 @@ echo " * Site Template provisioner script completed for ${VVV_SITE_NAME}"
 
 echo " * Install the rest with yo wpproject *"
 # install with yo wpproject
-noroot yo wpproject
+yo wpproject
