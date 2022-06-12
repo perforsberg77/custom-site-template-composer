@@ -39,46 +39,6 @@ setup_nginx_folders() {
   noroot mkdir -p "${PUBLIC_DIR_PATH}"
 }
 
-install_plugins() {
-  WP_PLUGINS=$(get_config_value 'install_plugins' '')
-  if [ ! -z "${WP_PLUGINS}" ]; then
-    isurl='(https?|ftp|file)://[-A-Za-z0-9\+&@#/%?=~_|!:,.;]*[-A-Za-z0-9\+&@#/%=~_|]'
-    for plugin in ${WP_PLUGINS//- /$'\n'}; do
-      if [[ "${plugin}" =~ $isurl ]]; then
-        echo " ! Warning, a URL was found for this plugin, attempting install and activate with --force set for ${plugin}"
-        noroot wp plugin install "${plugin}" --activate --force
-      else
-        if noroot wp plugin is-installed "${plugin}"; then
-          echo " * The ${plugin} plugin is already installed."
-        else
-          echo " * Installing and activating plugin: '${plugin}'"
-          noroot wp plugin install "${plugin}" --activate
-        fi
-      fi
-    done
-  fi
-}
-
-install_themes() {
-  WP_THEMES=$(get_config_value 'install_themes' '')
-  if [ ! -z "${WP_THEMES}" ]; then
-      isurl='(https?|ftp|file)://[-A-Za-z0-9\+&@#/%?=~_|!:,.;]*[-A-Za-z0-9\+&@#/%=~_|]'
-      for theme in ${WP_THEMES//- /$'\n'}; do
-        if [[ "${theme}" =~ $isurl ]]; then
-          echo " ! Warning, a URL was found for this theme, attempting install of ${theme} with --force set"
-          noroot wp theme install --force "${theme}"
-        else
-          if noroot wp theme is-installed "${theme}"; then
-            echo " * The ${theme} theme is already installed."
-          else
-            echo " * Installing theme: '${theme}'"
-            noroot wp theme install "${theme}"
-          fi
-        fi
-      done
-  fi
-}
-
 copy_nginx_configs() {
   echo " * Copying the sites Nginx config template"
   if [ -f "${VVV_PATH_TO_SITE}/provision/vvv-nginx-custom.conf" ]; then
@@ -100,10 +60,10 @@ copy_nginx_configs() {
 
     redirect_config=$((cat <<END_HEREDOC
 if (!-e \$request_filename) {
-  rewrite ^/[_0-9a-zA-Z-]+(/wp-content/uploads/.*) \$1;
+  rewrite ^/[_0-9a-zA-Z-]+(/app/uploads/.*) \$1;
 }
 if (!-e \$request_filename) {
-  rewrite ^/wp-content/uploads/(.*)\$ \$scheme://${LIVE_URL}/wp-content/uploads/\$1 redirect;
+  rewrite ^/app/uploads/(.*)\$ \$scheme://${LIVE_URL}/app/uploads/\$1 redirect;
 }
 END_HEREDOC
 
@@ -118,22 +78,6 @@ END_HEREDOC
   fi
 }
 
-setup_wp_config_constants(){
-  set +e
-  noroot shyaml get-values-0 -q "sites.${VVV_SITE_NAME}.custom.wpconfig_constants" < "${VVV_CONFIG}" |
-  while IFS='' read -r -d '' key &&
-        IFS='' read -r -d '' value; do
-      lower_value=$(echo "${value}" | awk '{print tolower($0)}')
-      echo " * Adding constant '${key}' with value '${value}' to wp-config.php"
-      if [ "${lower_value}" == "true" ] || [ "${lower_value}" == "false" ] || [[ "${lower_value}" =~ ^[+-]?[0-9]*$ ]] || [[ "${lower_value}" =~ ^[+-]?[0-9]+\.?[0-9]*$ ]]; then
-        noroot wp config set "${key}" "${value}" --raw
-      else
-        noroot wp config set "${key}" "${value}"
-      fi
-  done
-  set -e
-}
-
 restore_db_backup() {
   echo " * Found a database backup at ${1}. Restoring the site"
   noroot wp config set DB_USER "wp"
@@ -143,19 +87,6 @@ restore_db_backup() {
   noroot wp config set table_prefix "${DB_PREFIX}"
   noroot wp db import "${1}"
   echo " * Installed database backup"
-}
-
-download_wordpress() {
-  # Install and configure the latest stable version of WordPress
-  echo " * Downloading WordPress version '${1}' locale: '${2}'"
-  noroot wp core download --locale="${2}" --version="${1}"
-}
-
-initial_wpconfig() {
-  echo " * Setting up wp-config.php"
-  noroot wp config create --dbname="${DB_NAME}" --dbprefix="${DB_PREFIX}" --dbuser=wp --dbpass=wp
-  noroot wp config set WP_DEBUG true --raw
-  noroot wp config set SCRIPT_DEBUG true --raw
 }
 
 maybe_import_test_content() {
@@ -172,46 +103,6 @@ maybe_import_test_content() {
     echo " * Cleaning up import.xml"
     rm /tmp/import.xml
     echo " * Test content installed"
-  fi
-}
-
-install_wp() {
-  echo " * Installing WordPress"
-  ADMIN_USER=$(get_config_value 'admin_user' "admin")
-  ADMIN_PASSWORD=$(get_config_value 'admin_password' "password")
-  ADMIN_EMAIL=$(get_config_value 'admin_email' "admin@local.test")
-
-  echo " * Installing using wp core install --url=\"${DOMAIN}\" --title=\"${SITE_TITLE}\" --admin_name=\"${ADMIN_USER}\" --admin_email=\"${ADMIN_EMAIL}\" --admin_password=\"${ADMIN_PASSWORD}\""
-  noroot wp core install --url="${DOMAIN}" --title="${SITE_TITLE}" --admin_name="${ADMIN_USER}" --admin_email="${ADMIN_EMAIL}" --admin_password="${ADMIN_PASSWORD}"
-  echo " * WordPress was installed, with the username '${ADMIN_USER}', and the password '${ADMIN_PASSWORD}' at '${ADMIN_EMAIL}'"
-
-  if [ "${WP_TYPE}" = "subdomain" ]; then
-    echo " * Running Multisite install using wp core multisite-install --subdomains --url=\"${DOMAIN}\" --title=\"${SITE_TITLE}\" --admin_name=\"${ADMIN_USER}\" --admin_email=\"${ADMIN_EMAIL}\" --admin_password=\"${ADMIN_PASSWORD}\""
-    noroot wp core multisite-install --subdomains --url="${DOMAIN}" --title="${SITE_TITLE}" --admin_name="${ADMIN_USER}" --admin_email="${ADMIN_EMAIL}" --admin_password="${ADMIN_PASSWORD}"
-    echo " * Multisite install complete"
-  elif [ "${WP_TYPE}" = "subdirectory" ]; then
-    echo " * Running Multisite install using wp core ${INSTALL_COMMAND} --url=\"${DOMAIN}\" --title=\"${SITE_TITLE}\" --admin_name=\"${ADMIN_USER}\" --admin_email=\"${ADMIN_EMAIL}\" --admin_password=\"${ADMIN_PASSWORD}\""
-    noroot wp core multisite-install --url="${DOMAIN}" --title="${SITE_TITLE}" --admin_name="${ADMIN_USER}" --admin_email="${ADMIN_EMAIL}" --admin_password="${ADMIN_PASSWORD}"
-    echo " * Multisite install complete"
-  fi
-
-  DELETE_DEFAULT_PLUGINS=$(get_config_value 'delete_default_plugins' '')
-  if [ ! -z "${DELETE_DEFAULT_PLUGINS}" ]; then
-    echo " * Deleting the default plugins akismet and hello dolly"
-    noroot wp plugin delete akismet
-    noroot wp plugin delete hello
-  fi
-
-  maybe_import_test_content
-}
-
-update_wp() {
-  if [[ $(noroot wp core version) > "${WP_VERSION}" ]]; then
-    echo " * Installing an older version '${WP_VERSION}' of WordPress"
-    noroot wp core update --version="${WP_VERSION}" --force
-  else
-    echo " * Updating WordPress '${WP_VERSION}'"
-    noroot wp core update --version="${WP_VERSION}"
   fi
 }
 
@@ -233,36 +124,13 @@ setup_cli
 setup_database
 setup_nginx_folders
 
-if [ "${WP_TYPE}" == "none" ]; then
-  echo " * wp_type was set to none, provisioning WP was skipped, moving to Nginx configs"
-else
-  echo " * Install type is '${WP_TYPE}'"
-  # Install and configure the latest stable version of WordPress
-  if [[ ! -f "${PUBLIC_DIR_PATH}/wp-load.php" ]]; then
-    download_wordpress "${WP_VERSION}" "${WP_LOCALE}"
-  fi
-
-  if [[ ! -f "${PUBLIC_DIR_PATH}/wp-config.php" ]]; then
-    initial_wpconfig
-  fi
-
-  if ! $(noroot wp core is-installed ); then
-    echo " * WordPress is present but isn't installed to the database, checking for SQL dumps in wp-content/database.sql or the main backup folder."
-    if [ -f "${PUBLIC_DIR_PATH}/wp-content/database.sql" ]; then
-      restore_db_backup "${PUBLIC_DIR_PATH}/wp-content/database.sql"
-    elif [ -f "/srv/database/backups/${VVV_SITE_NAME}.sql" ]; then
-      restore_db_backup "/srv/database/backups/${VVV_SITE_NAME}.sql"
-    else
-      install_wp
-    fi
-  else
-    update_wp
-  fi
-fi
-
 copy_nginx_configs
-setup_wp_config_constants
-install_plugins
-install_themes
+# setup_wp_config_constants
+# install_plugins
+# install_themes
 
 echo " * Site Template provisioner script completed for ${VVV_SITE_NAME}"
+
+echo " * Install the rest with yo wpproject *"
+# install with yo wpproject
+noroot yo wpproject
